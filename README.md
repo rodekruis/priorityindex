@@ -1,7 +1,7 @@
 # priorityindex
 
 The priority index was developed by 510 an initiative by the Netherlands Red Cross
-Code is available under the GPL license.
+Code is available under the [GPL license](https://github.com/rodekruis/priorityindex/blob/master/LICENSE)
 
 ![alt tag](http://510.global/wp-content/uploads/2015/06/510-opengraph.png)
 
