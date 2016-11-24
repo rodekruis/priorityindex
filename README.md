@@ -1,5 +1,11 @@
 # priorityindex
 
+The priority index was developed by 510 an initiative by the Netherlands Red Cross
+Code is available under the GPL license.
+
+![alt tag](http://510.global/wp-content/uploads/2015/06/510-opengraph.png)
+
+
 ## Future steps
 
 To improve the performance, and reduce the error, of the prediction model we will try the following:
