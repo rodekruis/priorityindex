@@ -1,3 +1,13 @@
+# Script developed by Marco Velliscig (marco.velliscig AT gmail.com)
+# for the NL Red Cross
+# released under GNU GENERAL PUBLIC LICENSE Version 3 for the NL Red Cross
+# This script is for illustrative reasons only.
+# If you are interested in using the script please contact the 510.global team
+# 
+
+
+
+# notes of this version
 # automatic selection of best feautures/ combination of feautures
 # grid parameter search
 # neural network
