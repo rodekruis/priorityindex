@@ -3,8 +3,10 @@ import time
 import datetime
 import rasterio
 import pyproj
+import zipfile
 import numpy as np
 import geopandas as gpd
+from rasterio import merge
 from rasterstats import zonal_stats
 from fiona.crs import from_epsg
 from ftplib import FTP
@@ -20,8 +22,8 @@ date_start = "05-12-2014" # For precipitation data, DD-MM-YYYY
 date_end = "09-12-2014" # For precipitation data, DD-MM-YYYY
 
 #Specify dataset file names
-admin_file_name = "PHL_adm3_PSA_selection_epsg32651.shp"
-windspeed_file_name = "windspeed_hagupit_epsg32651.shp"
+admin_file_name = "PHL_adm3_PSA_pn_2016June.shp"
+windspeed_file_name = "windspeed_hagupit.shp"
 track_file_name = "track_hagupit.shp"
 
 #Specify output file names
@@ -58,6 +60,14 @@ def date_range(date_start, date_end):
 
 	return date_list
 
+def unzip(zip_file, destination):
+	os.makedirs(destination, exist_ok=True)
+
+	with zipfile.ZipFile(zip_file) as zf:
+		zf.extractall(destination)
+
+	return
+
 def reproject_file(gdf, file_name, epsg):
 	t0 = time.time()
 
@@ -83,7 +93,7 @@ def download_gpm(date_start, date_end, download_path, ppm_username):
 		print("OK!")
 	
 		for date in date_list:
-			t0 = time.time()
+			t1 = time.time()
 			print("Retrieving GPM data for %s..." % date, end="", flush=True)
 
 			d, m, y = reversed(date.split('-'))
@@ -102,7 +112,7 @@ def download_gpm(date_start, date_end, download_path, ppm_username):
 						with open(file_path, 'wb') as write_file: 
 							ftp.retrbinary('RETR ' + file_name, write_file.write)
 
-			t1 = timestamp(time.time(), t0)
+			t1 = timestamp(time.time(), t1)
 			
 	return file_list
 
@@ -115,31 +125,81 @@ def download_srtm(bounding_box, download_path):
 	tile_x0 = int((bounding_box[1][0] + 180) // 5)
 	tile_x1 = int((bounding_box[1][1] + 180) // 5)
 
+	tif_list = []
 	zip_list = []
+	ignore_list =[]
+
+	t1 = time.time()
 	os.makedirs(download_path, exist_ok=True)
 
-	print("Connecting to %s..." % base_url, end="", flush=True)	
-	with FTP(base_url) as ftp:
-		ftp.login()
-		print("OK!")
+	print("Checking local cache for SRTM tiles...", end="", flush=True)
 
-		ftp.cwd(data_dir)
+	ignore_file = os.path.join(download_path, "ignore_tiles.txt")
+	if os.path.isfile(ignore_file):
+		with open(ignore_file, 'r') as file:
+			for line in file.readlines():
+				ignore_list.append(line.strip())
 
-		for x in range(tile_x0, tile_x1 + 1):
-			for y in range(tile_y0, tile_y1 + 1):
-				t0 = time.time()
-				file_name = "srtm_%i_%i.zip" % (x, y)
-				print("Retrieving %s..." % file_name, end="", flush=True)
+	for x_int in range(tile_x0, tile_x1 + 1):
+		for y_int in range(tile_y0, tile_y1 + 1):
+			if x_int > 9: x = str(x_int)
+			else: x = "0" + str(x_int)
+			if y_int > 9: y = str(y_int)
+			else: y = "0" + str(y_int)
 
-				file_path = os.path.join(download_path, file_name)
-				zip_list.append(file_path)
-				if not os.path.isfile(file_path):
-					with open(file_path, 'wb') as write_file: 
-						ftp.retrbinary('RETR ' + file_name, write_file.write)
+			tile_folder = os.path.join(download_path, "%s_%s" % (x, y))
+			tile_path = os.path.join(tile_folder, "srtm_%s_%s.tif" % (x, y))
+			zip_path = os.path.join(download_path, "srtm_%s_%s.zip" % (x, y))
 
-				t1 = timestamp(time.time(), t0)
+			if os.path.isfile(tile_path): tif_list.append(tile_path)
+			else: 
+				if "%s_%s" % (x, y) not in ignore_list: 
+					zip_list.append((tile_folder, tile_path, zip_path, x, y))
 
-	return
+	print("found %i tiles..." % len(tif_list), end="", flush=True)
+	t1 = timestamp(time.time(), t1)
+
+	if zip_list:
+		print("Connecting to %s..." % base_url, end="", flush=True)
+		with FTP(base_url) as ftp:
+			ftp.login()
+			print("OK!")
+			ftp.cwd(data_dir)
+
+			for tile_folder, tile_path, zip_path, x, y in list(zip_list):
+				t1 = time.time()
+
+				zip_name = os.path.basename(zip_path)
+				print("Retrieving %s..." % zip_name, end="", flush=True)
+
+				if not os.path.isfile(zip_path):
+					with open(zip_path, 'wb') as write_file: 
+						try: 
+							ftp.retrbinary('RETR ' + zip_name, write_file.write)
+						except: 
+							print("skipped...", end="", flush=True)
+							os.remove(zip_path)
+							zip_list.remove((tile_folder, tile_path, zip_path, x, y))
+							ignore_list.append("%s_%s" % (x,y))
+				
+				else: print("found locally...", end="", flush=True)
+
+				t1 = timestamp(time.time(), t1)
+
+		if ignore_list:
+			with open(ignore_file, 'w') as file:
+				for tile in ignore_list:
+					file.write(tile + '\n')
+
+	if zip_list:
+		print("Unzipping downloaded tiles...", end="", flush=True)
+		for tile_folder, tile_path, zip_path, x, y in zip_list: 
+			unzip(zip_path, tile_folder)
+			tif_list.append(tile_path)
+
+		t1 = timestamp(time.time(), t1)
+
+	return tif_list
 
 def average_windspeed(admin_geometry, windspeed_geometry, windspeed_value):
 	wind_shapes = ((geometry, value) for geometry, value in zip(windspeed_geometry, windspeed_value))
@@ -173,7 +233,7 @@ def extract_coast(admin_geometry):
 def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm_username):
 	file_list = download_gpm(date_start, date_end, download_path, ppm_username)
 	
-	t0 = time.time()	
+	t1 = time.time()	
 	print("Reading GPM data...", end="", flush=True)
 	raster_list = []
 	for input_raster in file_list:
@@ -183,7 +243,7 @@ def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm
 		array[array == 9999] = 0
 		raster_list.append(array)
 
-	t1 = timestamp(time.time(), t0)
+	t1 = timestamp(time.time(), t1)
 
 	print("Calculating cumulative rainfall...", end="", flush=True)
 	sum_raster = np.add.reduce(raster_list)
@@ -193,14 +253,41 @@ def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm
 	sum_rainfall = zonal_stats(admin_transform, sum_raster, stats='mean', nodata=-999, all_touched=True, affine=transform)
 	sum_rainfall = [i['mean'] for i in sum_rainfall]
 
-	t1 = timestamp(time.time(), t0)
+	t1 = timestamp(time.time(), t1)
 
 	return sum_rainfall
 
-def geography(admin_geometry, download_path):
+def srtm_features(admin_geometry, download_path):
 	total_bounds = admin_geometry.total_bounds
 	bounding_box = get_latlon((total_bounds[0], total_bounds[2]), (total_bounds[1], total_bounds[3]), force_epsg)
-	elevation_raster = download_srtm(bounding_box, download_path)
+	file_list = download_srtm(bounding_box, download_path)
+
+	# t1 = time.time()	
+	# raster_list = []
+	# transform_list = []
+	# print("Reading SRTM data...", end="", flush=True)
+
+	# for input_raster in file_list: 
+	# 	raster_list.append(rasterio.open(input_raster))
+
+	# srtm_dem, srtm_transform = merge.merge(raster_list)
+
+	# for input_raster in raster_list:
+	# 	input_raster.close()
+
+	# del(raster_list)
+
+	# t1 = timestamp(time.time(), t1)
+
+	# print(srtm_dem.shape[0], srtm_dem.shape[1])
+
+	# print("Saving raster to disk...", end="", flush=True)
+	# with rasterio.open(os.path.join(download_path, 'srtm.tif'), 'w', driver='GTiff', height=srtm_dem.shape[0],
+ #                   width=srtm_dem.shape[1], count=1, dtype=srtm_dem.dtype,
+ #                   crs=from_epsg(4326), transform=srtm_transform) as dst:
+	#     dst.write(srtm_dem[0], 1)
+
+	# t1 = timestamp(time.time(), t1)
 
 	return
 
@@ -222,6 +309,11 @@ windspeed_gdf = gpd.GeoDataFrame.from_file(windspeed_file)
 track_gdf = gpd.GeoDataFrame.from_file(track_file)
 
 t1 = timestamp(time.time(), t0)
+
+# Check if CRS is defined and default to WGS 84 if not
+if not admin_gdf.crs: admin_gdf.crs = from_epsg(4326)
+if not windspeed_gdf.crs: windspeed_gdf.crs = from_epsg(4326)
+if not track_gdf.crs: track_gdf.crs = from_epsg(4326)
 
 # Check CRS of each layer and reproject if necessary
 if int(admin_gdf.crs['init'].split(':')[1]) != force_epsg: admin_gdf = reproject_file(admin_gdf, admin_file_name, force_epsg)
@@ -255,9 +347,9 @@ print("Calculating centroid distances...", end="", flush=True)
 output_gdf['dist_track'] = admin_gdf.centroid.geometry.apply(lambda g: track_gdf.distance(g).min()) / 10 ** 3
 t1 = timestamp(time.time(), t1)
 
-# print("Calculating coastline intersections...", end="", flush=True)
-# output_gdf['cp_ratio'] = extract_coast(admin_gdf.geometry)
-# t1 = timestamp(time.time(), t1)
+print("Calculating coastline intersections...", end="", flush=True)
+output_gdf['cp_ratio'] = extract_coast(admin_gdf.geometry)
+t1 = timestamp(time.time(), t1)
 
 print("Calculating areas...", end="", flush=True)
 output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
@@ -267,7 +359,7 @@ t1 = timestamp(time.time(), t1)
 output_gdf['rainfall'] = cumulative_rainfall(admin_gdf.geometry, date_start, date_end, gpm_path, ppm_username)
 
 output_gdf['avg_elev'], 
-output_gdf['avg_slope'] = geography(admin_gdf.geometry, srtm_path)
+output_gdf['avg_slope'] = srtm_features(admin_gdf.geometry, srtm_path)
 
 t1 = time.time()
 
