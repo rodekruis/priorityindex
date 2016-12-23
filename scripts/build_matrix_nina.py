@@ -14,7 +14,7 @@ from ftplib import FTP
 current_path = os.path.dirname(os.path.abspath(__file__))
 
 #Specify location of datasets
-workspace = os.path.join(current_path)
+workspace = os.path.join(current_path, "dataset")
 
 #Specify event specific data
 typhoon_name = "Hagupit"
@@ -350,12 +350,12 @@ def srtm_features(admin_geometry, bounding_box, download_path):
 	avg_slope = [i['mean'] for i in avg_slope]
 	t1 = timestamp(dt.datetime.now(), t1)
 
-	# print("Calculating mean ruggedness...", end="", flush=True)
-	# avg_rugged = zonal_stats(admin_geometry, ruggedness(srtm_utm, transform_utm), stats='mean', nodata=0, all_touched=True, affine=transform_utm)
-	# avg_rugged = [i['mean'] for i in avg_rugged]
-	# t1 = timestamp(dt.datetime.now(), t1)
+	print("Calculating mean ruggedness...", end="", flush=True)
+	avg_rugged = zonal_stats(admin_geometry, ruggedness(srtm_utm, transform_utm), stats='mean', nodata=0, all_touched=True, affine=transform_utm)
+	avg_rugged = [i['mean'] for i in avg_rugged]
+	t1 = timestamp(dt.datetime.now(), t1)
 
-	return avg_elevation, avg_slope
+	return avg_elevation, avg_slope, avg_rugged
 
 t0 = dt.datetime.now()
 
@@ -421,19 +421,19 @@ print("Calculating centroid distances...", end="", flush=True)
 output_gdf['dist_track'] = admin_gdf.centroid.geometry.apply(lambda g: track_gdf.distance(g).min()) / 10 ** 3
 t1 = timestamp(dt.datetime.now(), t1)
 
-print("Calculating coastline intersections...", end="", flush=True)
-output_gdf['coast_len'], output_gdf['cp_ratio'] = extract_coast(admin_gdf.geometry)
-t1 = timestamp(dt.datetime.now(), t1)
+# print("Calculating coastline intersections...", end="", flush=True)
+# output_gdf['coast_len'], output_gdf['cp_ratio'] = extract_coast(admin_gdf.geometry)
+# t1 = timestamp(dt.datetime.now(), t1)
 
-print("Calculating areas...", end="", flush=True)
-output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
-t1 = timestamp(dt.datetime.now(), t1)
+# print("Calculating areas...", end="", flush=True)
+# output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
+# t1 = timestamp(dt.datetime.now(), t1)
 
 # Calculating cumulative rainfall
 output_gdf['rainfall'] = cumulative_rainfall(admin_geometry_wgs84, date_start, date_end, gpm_path, ppm_username)
 
 # Calculating terrain features
-output_gdf['avg_elev'], output_gdf['avg_slope'] = srtm_features(admin_gdf.geometry, admin_geometry_wgs84.total_bounds, srtm_path)
+#output_gdf['avg_elev'], output_gdf['avg_slope'], output_gdf['avg_rugged'] = srtm_features(admin_gdf.geometry, admin_geometry_wgs84.total_bounds, srtm_path)
 
 # Assigning geometry
 output_gdf.geometry = admin_gdf.geometry
