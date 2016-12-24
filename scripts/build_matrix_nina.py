@@ -17,9 +17,11 @@ current_path = os.path.dirname(os.path.abspath(__file__))
 workspace = os.path.join(current_path, "dataset")
 
 #Specify event specific data
-typhoon_name = "Hagupit"
-date_start = "05-12-2014" # For precipitation data, DD-MM-YYYY
-date_end = "09-12-2014" # For precipitation data, DD-MM-YYYY
+typhoon_name = "Nina"
+date_start = "22-12-2016" # For precipitation data, DD-MM-YYYY
+date_end = "24-12-2016" # For precipitation data, DD-MM-YYYY
+imerg_type = "early" # IMERG data type, either "early" (6hr), "late" (18hr) or "final" (4 months), see https://pps.gsfc.nasa.gov/Documents/README.GIS.pdf
+					# early data is kept for 5 days and don't touch this as "late" isn't implemented yet.
 
 #Specify dataset file names
 admin_file_name = "PHL_adm3_PSA_pn_2016June.shp"
@@ -131,9 +133,13 @@ def ruggedness(array, transform):
 
 	return tr_index
 
-def download_gpm(date_start, date_end, download_path, ppm_username):
-	base_url = "arthurhou.pps.eosdis.nasa.gov" 
-	data_dir = "/pub/gpmdata/" # data_dir/yyyy/mm/dd/gis
+def download_gpm(date_start, date_end, download_path, ppm_username, imerg_type):
+	if imerg_type == "final":
+		base_url = "arthurhou.pps.eosdis.nasa.gov" 
+		data_dir = "/pub/gpmdata/" # data_dir/yyyy/mm/dd/gis
+	elif imerg_type == "early":
+		base_url = "jsimpson.pps.eosdis.nasa.gov" 
+		data_dir = "/NRTPUB/imerg/gis/early/" # all data from past 5 days is in this folder		
 
 	date_list = date_range(date_start, date_end)
 	file_list = []
@@ -146,26 +152,27 @@ def download_gpm(date_start, date_end, download_path, ppm_username):
 		print("OK!")
 	
 		for date in date_list:
-			t1 = dt.datetime.now()
-			print("Retrieving GPM data for %s..." % date, end="", flush=True)
+			#print("Retrieving GPM data for %s..." % date, end="", flush=True)
 
 			d, m, y = reversed(date.split('-'))
 			day_path = os.path.join(download_path, y+m+d)			
 			os.makedirs(day_path, exist_ok=True)
 
-			ftp.cwd(os.path.join(data_dir, y, m, d, 'gis'))
+			if imerg_type == "final": ftp.cwd(os.path.join(data_dir, y, m, d, 'gis'))
+			elif imerg_type == "early": ftp.cwd(data_dir)
 			for entry in ftp.mlsd():
 				file_name = entry[0]
-				if file_name.endswith(('tif', 'tfw')) and entry[0][3:6] == 'DAY':
+				if (imerg_type == "final" and file_name.endswith(('tif', 'tfw')) and entry[0][3:6] == 'DAY') or (imerg_type == "early" and file_name.endswith(('30min.tif', '30min.tfw')) and entry[0][23:31] == '%s%s%s' % (y,m,d)):
+					t1 = dt.datetime.now()
 					file_path = os.path.join(day_path, file_name)
 					if file_name.endswith('tif'): 
+						print("Retrieving %s..." % file_name, end="", flush=True)
 						file_list.append(file_path)
 						if os.path.isfile(file_path): print("found locally...", end="", flush=True)
 					if not os.path.isfile(file_path):
 						with open(file_path, 'wb') as write_file: 
 							ftp.retrbinary('RETR ' + file_name, write_file.write)
-
-			t1 = timestamp(dt.datetime.now(), t1)
+					if file_name.endswith('tif'): t1 = timestamp(dt.datetime.now(), t1)
 			
 	return file_list
 
@@ -287,9 +294,9 @@ def extract_coast(admin_geometry):
 
 	return coast_length, cp_ratio
 
-def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm_username):
-	file_list = download_gpm(date_start, date_end, download_path, ppm_username)
-	
+def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm_username, imerg_type):
+	file_list = download_gpm(date_start, date_end, download_path, ppm_username, imerg_type)
+
 	t1 = dt.datetime.now()	
 	print("Reading GPM data...", end="", flush=True)
 	raster_list = []
@@ -297,14 +304,16 @@ def cumulative_rainfall(admin_geometry, date_start, date_end, download_path, ppm
 		with rasterio.open(input_raster) as src:
 			array = src.read(1)
 			transform = src.affine
-		array[array == 9999] = 0
+		array = np.ma.masked_where(array == 9999, array)
+#		array[array == 9999] = 0
 		raster_list.append(array)
 
 	t1 = timestamp(dt.datetime.now(), t1)
 
 	print("Calculating cumulative rainfall...", end="", flush=True)
 	sum_raster = np.add.reduce(raster_list)
-	sum_raster = sum_raster / 10 * 24
+	sum_raster = sum_raster / 10
+	if imerg_type == "final": sum_raster = sum_raster * 24
 
 	sum_rainfall = zonal_stats(admin_geometry, sum_raster, stats='mean', nodata=-999, all_touched=True, affine=transform)
 	sum_rainfall = [i['mean'] for i in sum_rainfall]
@@ -334,6 +343,9 @@ def srtm_features(admin_geometry, bounding_box, download_path):
 	for input_raster in raster_list:
 		input_raster.close()
 	del(raster_list)
+
+	# Add no data mask!!
+
 	t1 = timestamp(dt.datetime.now(), t1)
 
 	print("Reprojecting DEM to EPSG %i..." % force_epsg, end="", flush=True)
@@ -350,12 +362,12 @@ def srtm_features(admin_geometry, bounding_box, download_path):
 	avg_slope = [i['mean'] for i in avg_slope]
 	t1 = timestamp(dt.datetime.now(), t1)
 
-	print("Calculating mean ruggedness...", end="", flush=True)
-	avg_rugged = zonal_stats(admin_geometry, ruggedness(srtm_utm, transform_utm), stats='mean', nodata=0, all_touched=True, affine=transform_utm)
-	avg_rugged = [i['mean'] for i in avg_rugged]
-	t1 = timestamp(dt.datetime.now(), t1)
+	# print("Calculating mean ruggedness...", end="", flush=True)
+	# avg_rugged = zonal_stats(admin_geometry, ruggedness(srtm_utm, transform_utm), stats='mean', nodata=0, all_touched=True, affine=transform_utm)
+	# avg_rugged = [i['mean'] for i in avg_rugged]
+	# t1 = timestamp(dt.datetime.now(), t1)
 
-	return avg_elevation, avg_slope, avg_rugged
+	return avg_elevation, avg_slope
 
 t0 = dt.datetime.now()
 
@@ -425,15 +437,15 @@ t1 = timestamp(dt.datetime.now(), t1)
 # output_gdf['coast_len'], output_gdf['cp_ratio'] = extract_coast(admin_gdf.geometry)
 # t1 = timestamp(dt.datetime.now(), t1)
 
-# print("Calculating areas...", end="", flush=True)
-# output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
-# t1 = timestamp(dt.datetime.now(), t1)
+print("Calculating areas...", end="", flush=True)
+output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
+t1 = timestamp(dt.datetime.now(), t1)
 
 # Calculating cumulative rainfall
-output_gdf['rainfall'] = cumulative_rainfall(admin_geometry_wgs84, date_start, date_end, gpm_path, ppm_username)
+output_gdf['rainfall'] = cumulative_rainfall(admin_geometry_wgs84, date_start, date_end, gpm_path, ppm_username, imerg_type)
 
 # Calculating terrain features
-#output_gdf['avg_elev'], output_gdf['avg_slope'], output_gdf['avg_rugged'] = srtm_features(admin_gdf.geometry, admin_geometry_wgs84.total_bounds, srtm_path)
+#output_gdf['avg_elev'], output_gdf['avg_slope'] = srtm_features(admin_gdf.geometry, admin_geometry_wgs84.total_bounds, srtm_path)
 
 # Assigning geometry
 output_gdf.geometry = admin_gdf.geometry
@@ -441,9 +453,10 @@ output_gdf.geometry = admin_gdf.geometry
 t1 = dt.datetime.now()
 
 # Save output as shapefile and csv
-print("Exporting output to %s..." % output_shp_name, end="", flush=True)
-output_gdf.to_file(output_shp_file)
-t1 = timestamp(dt.datetime.now(), t1)
+if output_shp_name:
+	print("Exporting output to %s..." % output_shp_name, end="", flush=True)
+	output_gdf.to_file(output_shp_file)
+	t1 = timestamp(dt.datetime.now(), t1)
 
 if output_csv_name:
 	print("Exporting output to %s..." % output_csv_name, end="", flush=True)
