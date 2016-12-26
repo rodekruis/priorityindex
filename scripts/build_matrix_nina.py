@@ -24,13 +24,18 @@ imerg_type = "early" # IMERG data type, either "early" (6hr), "late" (18hr) or "
 					# early data is kept for 5 days and don't touch this as "late" isn't implemented yet.
 
 #Specify dataset file names
-admin_file_name = "PHL_adm3_PSA_pn_2016June.shp"
-windspeed_file_name = "windspeed_hagupit.shp"
+#admin_file_name = "PHL_adm3_PSA_pn_2016June.shp"
+#windspeed_file_name = "KML_Track.shp"
+#track_file_name = "track_hagupit.shp"
+
+admin_file_name = "PHL_adm3_PSA_selection.shp"
+windspeed_file_name = "KML_Track.shp"
 track_file_name = "track_hagupit.shp"
 
 #Specify output file names
 output_shp_name = typhoon_name + "_matrix.shp"
 output_csv_name = typhoon_name + "_matrix.csv"
+output2_csv_name = typhoon_name + "_rainfall.csv"
 
 #Specify PPM login
 ppm_username = "bleumink@gmail.com"
@@ -269,7 +274,7 @@ def average_windspeed(admin_geometry, windspeed_geometry, windspeed_value):
 	for wind_shape in wind_shapes:
 		part = admin_geometry.intersection(wind_shape[0])
 		if part.area > 0:
-			part_list.append((part.area, float(wind_shape[1][:-4])))
+			part_list.append((part.area, float(wind_shape[1].split(' ')[0])))
 
 		if len(part_list) > 0:
 			total_area = sum(i for i, j in part_list)
@@ -379,6 +384,7 @@ windspeed_file = os.path.join(workspace, windspeed_file_name)
 track_file = os.path.join(workspace, track_file_name)
 output_shp_file = os.path.join(workspace, output_shp_name)
 output_csv_file = os.path.join(workspace, output_csv_name)
+output2_csv_file = os.path.join(workspace, output2_csv_name)
 
 # Loading shapefiles
 print("Importing shapefiles...", end="", flush=True)
@@ -405,32 +411,38 @@ if int(track_gdf.crs['init'].split(':')[1]) != force_epsg: track_gdf = reproject
 t1 = dt.datetime.now()
 
 output_columns = [
-'P_Code',
-'avg_speed',
-'dist_track',
-'coast_len',
-'cp_ratio',
-'rainfall',
-'avg_elev',
-'avg_slope',
-'avg_rugged',
+'avg_speed_mph',
+'distance_typhoon_km',
 'area_km2',
+'Mun_Code',
+'OBJECTID',
+'x_pos',
+'y_pos',
+'geometry']
+
+output_columns2 = [
+'M_Code',
+'Rainfallme',
 'geometry']
 
 output_gdf = gpd.GeoDataFrame(columns=output_columns, crs=from_epsg(force_epsg))
+output_gdf2 = gpd.GeoDataFrame(columns=output_columns2, crs=from_epsg(force_epsg))
 
 # Comment out sections here if you don't need to calculate them
 
 print("Assigning P codes...", end="", flush=True)
-output_gdf['P_Code'] = admin_gdf[p_code]
+output_gdf['Mun_Code'] = admin_gdf[p_code]
+output_gdf2['M_Code'] = admin_gdf[p_code]
 t1 = timestamp(dt.datetime.now(), t1)
 
 print("Calculating average windspeeds...", end="", flush=True)
-output_gdf['avg_speed'] = admin_gdf.geometry.apply(average_windspeed, args=(windspeed_gdf.geometry, windspeed_gdf['Name']))
+output_gdf['avg_speed_mph'] = admin_gdf.geometry.apply(average_windspeed, args=(windspeed_gdf.geometry, windspeed_gdf['Name']))
 t1 = timestamp(dt.datetime.now(), t1)
 
 print("Calculating centroid distances...", end="", flush=True)
-output_gdf['dist_track'] = admin_gdf.centroid.geometry.apply(lambda g: track_gdf.distance(g).min()) / 10 ** 3
+output_gdf['distance_typhoon_km'] = admin_gdf.centroid.geometry.apply(lambda g: track_gdf.distance(g).min()) / 10 ** 3
+output_gdf['x_pos'] = admin_gdf.centroid.map(lambda p: p.x)
+output_gdf['y_pos'] = admin_gdf.centroid.map(lambda p: p.y)
 t1 = timestamp(dt.datetime.now(), t1)
 
 # print("Calculating coastline intersections...", end="", flush=True)
@@ -442,26 +454,30 @@ output_gdf['area_km2'] = admin_gdf.area / 10 ** 6
 t1 = timestamp(dt.datetime.now(), t1)
 
 # Calculating cumulative rainfall
-output_gdf['rainfall'] = cumulative_rainfall(admin_geometry_wgs84, date_start, date_end, gpm_path, ppm_username, imerg_type)
+output_gdf2['Rainfallme'] = cumulative_rainfall(admin_geometry_wgs84, date_start, date_end, gpm_path, ppm_username, imerg_type)
 
 # Calculating terrain features
 #output_gdf['avg_elev'], output_gdf['avg_slope'] = srtm_features(admin_gdf.geometry, admin_geometry_wgs84.total_bounds, srtm_path)
 
 # Assigning geometry
 output_gdf.geometry = admin_gdf.geometry
+output_gdf2.geometry = admin_gdf.geometry
 
 t1 = dt.datetime.now()
 
 # Save output as shapefile and csv
-if output_shp_name:
-	print("Exporting output to %s..." % output_shp_name, end="", flush=True)
-	output_gdf.to_file(output_shp_file)
-	t1 = timestamp(dt.datetime.now(), t1)
+# if output_shp_name:
+# 	print("Exporting output to %s..." % output_shp_name, end="", flush=True)
+# 	output_gdf.to_file(output_shp_file)
+# 	t1 = timestamp(dt.datetime.now(), t1)
 
 if output_csv_name:
 	print("Exporting output to %s..." % output_csv_name, end="", flush=True)
 	output_df = output_gdf.drop('geometry', axis=1)
 	output_df.to_csv(output_csv_file)
+	print("Exporting output to %s..." % output2_csv_name, end="", flush=True)
+	output_df2 = output_gdf2.drop('geometry', axis=1)
+	output_df2.to_csv(output2_csv_file)
 	t1 = timestamp(dt.datetime.now(), t1)
 
 t_total = dt.datetime.now()
